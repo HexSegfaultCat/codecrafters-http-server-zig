@@ -2,7 +2,7 @@ const std = @import("std");
 const http = std.http;
 const testing = std.testing;
 
-pub fn sendGetRequest(comptime ipAddress: []const u8, comptime port: u16) !http.Status {
+pub fn sendGetRequest(comptime url: []const u8) !http.Status {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
 
@@ -15,12 +15,7 @@ pub fn sendGetRequest(comptime ipAddress: []const u8, comptime port: u16) !http.
     defer bodyResponse.deinit();
 
     const httpResponse = try client.fetch(.{
-        .location = .{
-            .url = comptime std.fmt.comptimePrint(
-                "http://{s}:{d}",
-                .{ ipAddress, port },
-            ),
-        },
+        .location = .{ .uri = try std.Uri.parse(url) },
         .method = http.Method.GET,
         .keep_alive = false,
         .response_storage = .{
@@ -31,9 +26,16 @@ pub fn sendGetRequest(comptime ipAddress: []const u8, comptime port: u16) !http.
     return httpResponse.status;
 }
 
-test "switch on tagged union" {
+test "Check response for empty request" {
     try testing.expectEqual(
         http.Status.ok,
-        try sendGetRequest("127.0.0.1", 4221),
+        try sendGetRequest("http://127.0.0.1:4221"),
+    );
+}
+
+test "Check response for `index.html`" {
+    try testing.expectEqual(
+        http.Status.ok,
+        try sendGetRequest("http://127.0.0.1:4221/index.html"),
     );
 }
