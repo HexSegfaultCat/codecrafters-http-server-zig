@@ -1,10 +1,17 @@
 const std = @import("std");
 const net = std.net;
 
-const httpConsts = @import("./http/http.consts.zig");
-const httpEnums = @import("./http/http.enums.zig");
-const httpStructs = @import("./http/http.structs.zig");
-const httpUtils = @import("./http/http.utils.zig");
+const _debug = @import("./http/_debug.zig");
+
+const httpConsts = @import("./http/consts.zig");
+const httpEnums = @import("./http/enums.zig");
+const httpUtils = @import("./http/utils.zig");
+
+const httpRequest = @import("./http/request.zig");
+const HttpRequest = httpRequest.HttpRequest;
+
+const httpResponse = @import("./http/response.zig");
+const HttpResponse = httpResponse.HttpResponse;
 
 pub fn main() !void {
     try createHttpServer("127.0.0.1", 4221);
@@ -29,25 +36,29 @@ pub fn createHttpServer(ipAddress: []const u8, port: u16) !void {
 
         const allocator = std.heap.page_allocator;
 
-        const requestData = try httpUtils.readStreamData(
+        const rawRequestData = try httpRequest.readStreamData(
             allocator,
             connection.stream,
         );
-        defer requestData.deinit();
+        defer rawRequestData.deinit();
 
-        // TODO: Remove this debbuing print
-        std.debug.print("[REQUEST] Received {d} bytes\n---\n{s}\n---\n", .{
-            requestData.items.len,
-            requestData.items,
-        });
+        var requestStruct = HttpRequest.init(allocator);
+        defer requestStruct.deinit();
 
-        const requestStruct = try httpUtils.parseRequest(requestData);
+        try httpRequest.parseUpdateRequest(
+            rawRequestData,
+            &requestStruct,
+        );
 
-        var responseStruct = httpStructs.HttpResponse.init(allocator);
+        var responseStruct = HttpResponse.init(allocator);
         defer responseStruct.deinit();
 
         try routerUpdateResponse(requestStruct, &responseStruct);
-        try httpUtils.sendResponse(responseStruct, connection.stream);
+        try httpResponse.sendResponse(responseStruct, connection.stream);
+
+        // _debug.printRawRequest(rawRequestData);
+        _debug.printParsedRequest(requestStruct);
+        _debug.printParsedResponse(responseStruct);
 
         connection.stream.close();
     } else |err| {
@@ -55,7 +66,7 @@ pub fn createHttpServer(ipAddress: []const u8, port: u16) !void {
     }
 }
 
-fn routerUpdateResponse(request: httpStructs.HttpRequestStatusLine, response: *httpStructs.HttpResponse) !void {
+fn routerUpdateResponse(request: HttpRequest, response: *HttpResponse) !void {
     if (std.mem.eql(u8, request.path, "/") or
         std.mem.eql(u8, request.path, "/index.html"))
     {
@@ -69,6 +80,18 @@ fn routerUpdateResponse(request: httpStructs.HttpRequestStatusLine, response: *h
         try response.prepare(
             httpEnums.HttpStatus.Ok,
             request.path[prefixLength..],
+            "text/plain",
+        );
+    } else if (std.mem.eql(u8, request.path, "/user-agent")) {
+        const userAgentHeaderUpper = try std.ascii.allocUpperString(
+            request.allocator,
+            httpConsts.HEADER_USER_AGENT,
+        );
+        defer request.allocator.free(userAgentHeaderUpper);
+
+        try response.prepare(
+            httpEnums.HttpStatus.Ok,
+            request.headers.get(userAgentHeaderUpper),
             "text/plain",
         );
     } else {

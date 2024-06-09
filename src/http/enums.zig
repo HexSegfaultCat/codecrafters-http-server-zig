@@ -12,7 +12,7 @@ pub const HttpStatus = enum(u16) {
     }
 };
 
-const MethodError = error{
+pub const MethodError = error{
     MissingHttpMethod,
     MalformedHttpMethod,
 };

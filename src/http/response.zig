@@ -1,32 +1,26 @@
 const std = @import("std");
 
-const httpConsts = @import("./http.consts.zig");
-const httpEnums = @import("./http.enums.zig");
-
-pub const HttpRequestStatusLine = struct {
-    method: httpEnums.HttpMethod,
-    path: []const u8,
-    protocol: []const u8,
-};
-
-pub const HttpResponseStatus = struct {
-    protocolVersion: []const u8,
-    statusCode: httpEnums.HttpStatus,
-};
+const httpConsts = @import("./consts.zig");
+const httpEnums = @import("./enums.zig");
 
 pub const HttpResponse = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
 
-    status: HttpResponseStatus,
+    protocolVersion: []const u8,
+    statusCode: httpEnums.HttpStatus,
     headers: std.StringHashMap([]const u8),
+
     body: ?[]const u8,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .allocator = allocator,
-            .status = undefined,
+
+            .protocolVersion = undefined,
+            .statusCode = undefined,
+
             .headers = std.StringHashMap([]const u8).init(allocator),
             .body = null,
         };
@@ -49,10 +43,8 @@ pub const HttpResponse = struct {
         body: ?[]const u8,
         contentType: ?[]const u8,
     ) !void {
-        self.status = .{
-            .protocolVersion = httpConsts.HTTP_VERSION,
-            .statusCode = status,
-        };
+        self.protocolVersion = httpConsts.HTTP_VERSION;
+        self.statusCode = status;
 
         if (body != null) {
             self.body = try self.allocator.dupe(u8, body.?);
@@ -75,3 +67,37 @@ pub const HttpResponse = struct {
         }
     }
 };
+
+pub fn sendResponse(response: HttpResponse, stream: std.net.Stream) !void {
+    const statusResponse = try std.fmt.allocPrint(
+        response.allocator,
+        "HTTP/{s} {d} {s}\r\n",
+        .{
+            response.protocolVersion,
+            @intFromEnum(response.statusCode),
+            httpEnums.HttpStatus.statusName(response.statusCode),
+        },
+    );
+    defer response.allocator.free(statusResponse);
+
+    try stream.writeAll(statusResponse);
+
+    var headersIterator = response.headers.iterator();
+    while (headersIterator.next()) |headerEntry| {
+        const headerResponse = try std.fmt.allocPrint(
+            response.allocator,
+            "{s}: {s}\r\n",
+            .{ headerEntry.key_ptr.*, headerEntry.value_ptr.* },
+        );
+        defer response.allocator.free(headerResponse);
+
+        try stream.writeAll(headerResponse);
+    }
+
+    // INFO: Ends header section
+    try stream.writeAll("\r\n");
+
+    if (response.body != null) {
+        try stream.writeAll(response.body.?);
+    }
+}

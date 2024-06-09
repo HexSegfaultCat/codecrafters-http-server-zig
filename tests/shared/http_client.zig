@@ -12,7 +12,11 @@ pub const Response = struct {
     }
 };
 
-pub fn fetchResponse(comptime url: []const u8, method: http.Method) !Response {
+pub fn fetchResponse(
+    comptime url: []const u8,
+    method: http.Method,
+    headers: http.Client.Request.Headers,
+) !Response {
     const allocator = std.heap.page_allocator;
 
     var client = http.Client{ .allocator = allocator };
@@ -26,6 +30,7 @@ pub fn fetchResponse(comptime url: []const u8, method: http.Method) !Response {
         .response_storage = .{
             .dynamic = &bodyResponse,
         },
+        .headers = headers,
     });
 
     return .{
