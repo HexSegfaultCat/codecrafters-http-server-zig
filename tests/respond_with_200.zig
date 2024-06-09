@@ -2,40 +2,35 @@ const std = @import("std");
 const http = std.http;
 const testing = std.testing;
 
-pub fn sendGetRequest(comptime url: []const u8) !http.Status {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(gpa.deinit() == .ok);
-
-    const allocator = gpa.allocator();
-
-    var client = http.Client{ .allocator = allocator };
-    defer client.deinit();
-
-    var bodyResponse = std.ArrayListAligned(u8, null).init(allocator);
-    defer bodyResponse.deinit();
-
-    const httpResponse = try client.fetch(.{
-        .location = .{ .uri = try std.Uri.parse(url) },
-        .method = http.Method.GET,
-        .keep_alive = false,
-        .response_storage = .{
-            .dynamic = &bodyResponse,
-        },
-    });
-
-    return httpResponse.status;
-}
+const httpClient = @import("./shared/http_client.zig");
 
 test "Check response for empty request" {
+    var response = try httpClient.fetchResponse(
+        "http://127.0.0.1:4221",
+        http.Method.GET,
+    );
+    defer response.deinit();
+
     try testing.expectEqual(
         http.Status.ok,
-        try sendGetRequest("http://127.0.0.1:4221"),
+        response.status,
     );
 }
 
 test "Check response for `index.html`" {
+    var response = try httpClient.fetchResponse(
+        "http://127.0.0.1:4221/index.html",
+        http.Method.GET,
+    );
+    defer response.deinit();
+
     try testing.expectEqual(
         http.Status.ok,
-        try sendGetRequest("http://127.0.0.1:4221/index.html"),
+        response.status,
+    );
+
+    std.debug.print(
+        "\n[FOO] Size {d}: {s}\n",
+        .{ response.body.items.len, response.body.items },
     );
 }

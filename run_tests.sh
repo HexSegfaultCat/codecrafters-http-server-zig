@@ -74,7 +74,7 @@ if [ -n "${1}" ]; then
   run_test "${FILENAME}" DEBUG
 else
   # Run all tests in non-debug mode (prints debug only on error)
-  for test_file in $(ls ${TESTS_DIRECTORY}); do
+  for test_file in $(ls -p ${TESTS_DIRECTORY} | grep -v /); do
     run_test "${test_file}"
   done
 fi
