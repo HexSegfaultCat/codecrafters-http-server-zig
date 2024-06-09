@@ -13,7 +13,14 @@ const HttpRequest = httpRequest.HttpRequest;
 const httpResponse = @import("./http/response.zig");
 const HttpResponse = httpResponse.HttpResponse;
 
+var clientsThreadPool: std.ArrayList(std.Thread) = undefined;
+
 pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+
+    clientsThreadPool = std.ArrayList(std.Thread).init(allocator);
+    defer clientsThreadPool.deinit();
+
     try createHttpServer("127.0.0.1", 4221);
 }
 
@@ -32,38 +39,50 @@ pub fn createHttpServer(ipAddress: []const u8, port: u16) !void {
     );
 
     while (listener.accept()) |connection| {
-        try stdout.print("Accepted new connection\n", .{});
-
-        const allocator = std.heap.page_allocator;
-
-        const rawRequestData = try httpRequest.readStreamData(
-            allocator,
-            connection.stream,
-        );
-        defer rawRequestData.deinit();
-
-        var requestStruct = HttpRequest.init(allocator);
-        defer requestStruct.deinit();
-
-        try httpRequest.parseUpdateRequest(
-            rawRequestData,
-            &requestStruct,
+        try stdout.print(
+            "Accepted new connection from {any}\n",
+            .{connection.address},
         );
 
-        var responseStruct = HttpResponse.init(allocator);
-        defer responseStruct.deinit();
-
-        try routerUpdateResponse(requestStruct, &responseStruct);
-        try httpResponse.sendResponse(responseStruct, connection.stream);
-
-        // _debug.printRawRequest(rawRequestData);
-        _debug.printParsedRequest(requestStruct);
-        _debug.printParsedResponse(responseStruct);
-
-        connection.stream.close();
+        const thread = try std.Thread.spawn(
+            .{},
+            clientHandler,
+            .{connection},
+        );
+        try clientsThreadPool.append(thread);
     } else |err| {
         return err;
     }
+}
+
+fn clientHandler(connection: std.net.Server.Connection) !void {
+    const allocator = std.heap.page_allocator;
+
+    const rawRequestData = try httpRequest.readStreamData(
+        allocator,
+        connection.stream,
+    );
+    defer rawRequestData.deinit();
+
+    var requestStruct = HttpRequest.init(allocator);
+    defer requestStruct.deinit();
+
+    try httpRequest.parseUpdateRequest(
+        rawRequestData,
+        &requestStruct,
+    );
+
+    var responseStruct = HttpResponse.init(allocator);
+    defer responseStruct.deinit();
+
+    try routerUpdateResponse(requestStruct, &responseStruct);
+    try httpResponse.sendResponse(responseStruct, connection.stream);
+
+    // _debug.printRawRequest(rawRequestData);
+    _debug.printParsedRequest(requestStruct);
+    _debug.printParsedResponse(responseStruct);
+
+    connection.stream.close();
 }
 
 fn routerUpdateResponse(request: HttpRequest, response: *HttpResponse) !void {
