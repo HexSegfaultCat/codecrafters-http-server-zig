@@ -28,7 +28,11 @@ pub fn validatedProtocol(protocol: ?[]const u8) ProtocolError![]const u8 {
         return ProtocolError.MissingProtocol;
     }
 
-    const separatorIndex = std.mem.indexOf(u8, protocol.?, "/") orelse {
+    const separatorIndex = std.mem.indexOfScalar(
+        u8,
+        protocol.?,
+        '/',
+    ) orelse {
         return ProtocolError.MalformedProtocol;
     };
 

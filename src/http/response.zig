@@ -35,6 +35,7 @@ pub const HttpResponse = struct {
         if (self.body != null) {
             self.allocator.free(self.body.?);
         }
+        self.* = undefined;
     }
 
     pub fn prepare(
@@ -67,37 +68,3 @@ pub const HttpResponse = struct {
         }
     }
 };
-
-pub fn sendResponse(response: HttpResponse, stream: std.net.Stream) !void {
-    const statusResponse = try std.fmt.allocPrint(
-        response.allocator,
-        "HTTP/{s} {d} {s}\r\n",
-        .{
-            response.protocolVersion,
-            @intFromEnum(response.statusCode),
-            httpEnums.HttpStatus.statusName(response.statusCode),
-        },
-    );
-    defer response.allocator.free(statusResponse);
-
-    try stream.writeAll(statusResponse);
-
-    var headersIterator = response.headers.iterator();
-    while (headersIterator.next()) |headerEntry| {
-        const headerResponse = try std.fmt.allocPrint(
-            response.allocator,
-            "{s}: {s}\r\n",
-            .{ headerEntry.key_ptr.*, headerEntry.value_ptr.* },
-        );
-        defer response.allocator.free(headerResponse);
-
-        try stream.writeAll(headerResponse);
-    }
-
-    // INFO: Ends header section
-    try stream.writeAll("\r\n");
-
-    if (response.body != null) {
-        try stream.writeAll(response.body.?);
-    }
-}
