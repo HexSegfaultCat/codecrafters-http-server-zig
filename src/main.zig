@@ -119,10 +119,10 @@ fn serveFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointRe
         };
     }
 
-    const file = std.fs.cwd().openFile(fullFilePath, .{}) catch {
-        return .{
-            .statusCode = .ServerError,
-            .body = "Error when opening the file",
+    const file = std.fs.cwd().openFile(fullFilePath, .{}) catch |err| {
+        return switch (err) {
+            error.FileNotFound => .{ .statusCode = .NotFound },
+            else => .{ .statusCode = .ServerError },
         };
     };
     const fileData = file.readToEndAlloc(

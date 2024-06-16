@@ -12,3 +12,6 @@ CURL_STATUS=$?
 if [[ "${CURL_STATUS}" != "0" || "${FILE_CONTENT}" != "${CURL_RESPONSE}"? ]]; then
 	exit 1
 fi
+
+STATUS_CODE=$(curl -s -w "%{response_code}" http://127.0.0.1:4221/files/non_existing_file)
+[ ${STATUS_CODE} == 404 ]
