@@ -3,12 +3,17 @@ const std = @import("std");
 const _debug = @import("./_debug.zig");
 
 const httpConsts = @import("./consts.zig");
-const httpEnums = @import("./enums.zig");
+
+const HttpRouter = @import("./router.zig").HttpRouter;
 
 const HttpRequest = @import("./request.zig").HttpRequest;
 const HttpResponse = @import("./response.zig").HttpResponse;
 
-const HttpRouter = @import("./router.zig").HttpRouter;
+const HttpStatus = HttpResponse.HttpStatus;
+const EndpointHandler = HttpRouter.EndpointHandler;
+
+const ResponseBuilder = @import("./response.zig").ResponseBuilder;
+const EndpointResponse = @import("./response.zig").EndpointResponse;
 
 pub const HttpServer = struct {
     const Self = @This();
@@ -44,11 +49,7 @@ pub const HttpServer = struct {
         self.* = undefined;
     }
 
-    pub fn setupServer(
-        self: *Self,
-        ipAddress: []const u8,
-        port: u16,
-    ) !void {
+    pub fn setupServer(self: *Self, ipAddress: []const u8, port: u16) !void {
         self.address = try std.net.Address.resolveIp(ipAddress, port);
     }
 
@@ -70,7 +71,7 @@ pub const HttpServer = struct {
 
             const thread = try std.Thread.spawn(
                 .{},
-                clientHandler,
+                clientThreadHandler,
                 .{ self, connection },
             );
             try self.clientThreads.append(thread);
@@ -79,42 +80,82 @@ pub const HttpServer = struct {
         }
     }
 
-    pub fn clientHandler(self: *Self, connection: std.net.Server.Connection) !void {
+    fn clientThreadHandler(self: *Self, connection: std.net.Server.Connection) !void {
+        defer connection.stream.close();
+
+        const rawRequestData = try self.readRequestData(connection.stream);
+        defer rawRequestData.deinit();
+
         var request = HttpRequest.init(self.allocator);
         defer request.deinit();
 
-        const rawRequestData = try request.readStreamData(
-            connection.stream,
-        );
-        defer rawRequestData.deinit();
-
-        try request.parseUpdateRequest(
-            rawRequestData,
+        try request.parseUpdateRequest(rawRequestData);
+        const routeMatch = try self.router.findRouteHandlerAndUpdateVariablesMap(
+            request.method,
+            request.path,
+            &request.pathVariables,
         );
 
-        var responseStruct = HttpResponse.init(self.allocator);
-        defer responseStruct.deinit();
+        var response = HttpResponse.init(self.allocator);
+        defer response.deinit();
 
-        try self.router.updateResponse(request, &responseStruct);
-        try self.sendResponse(responseStruct, connection.stream);
+        try self.writerStream.print("[{any}] {s} {s}\n", .{
+            connection.address,
+            @tagName(request.method),
+            request.path,
+        });
 
-        // _debug.printRawRequest(rawRequestData);
+        if (routeMatch) |routeHandler| {
+            var responseBuilder = ResponseBuilder.init(request.allocator, &response.headers);
+            defer responseBuilder.deinit();
+
+            const endpointResponse = routeHandler(request, &responseBuilder);
+            try response.updateResponse(responseBuilder, endpointResponse);
+        } else {
+            try response.updateResponse(null, .{ .statusCode = HttpStatus.NotFound });
+        }
+
+        try sendResponse(response, connection.stream);
+
         _debug.printParsedRequest(request);
-        _debug.printParsedResponse(responseStruct);
-
-        connection.stream.close();
+        _debug.printParsedResponse(response);
     }
 
-    pub fn sendResponse(self: *Self, response: HttpResponse, stream: std.net.Stream) !void {
-        _ = self;
+    fn readRequestData(self: *Self, stream: std.net.Stream) !std.ArrayList(u8) {
+        var outputData = std.ArrayList(u8).init(self.allocator);
 
+        const buffer = try self.allocator.alloc(u8, httpConsts.BUFFER_SIZE);
+        defer self.allocator.free(buffer);
+
+        var fds = [_]std.posix.pollfd{.{
+            .fd = stream.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+
+        while (stream.read(buffer)) |bytesRead| {
+            try outputData.appendSlice(buffer[0..bytesRead]);
+
+            const dataAvailable = try std.posix.poll(&fds, 0);
+            if (bytesRead < buffer.len or dataAvailable == 0) {
+                break;
+            }
+        } else |err| {
+            return err;
+        }
+
+        return outputData;
+    }
+
+    fn sendResponse(response: HttpResponse, stream: std.net.Stream) !void {
         const statusResponse = try std.fmt.allocPrint(
             response.allocator,
-            "HTTP/{s} {d} {s}\r\n",
+            "{s}/{s} {d} {s}\r\n",
             .{
+                httpConsts.HTTP_PROTOCOL,
                 response.protocolVersion,
                 @intFromEnum(response.statusCode),
-                httpEnums.HttpStatus.statusName(response.statusCode),
+                HttpStatus.statusName(response.statusCode),
             },
         );
         defer response.allocator.free(statusResponse);
@@ -133,11 +174,10 @@ pub const HttpServer = struct {
             try stream.writeAll(headerResponse);
         }
 
-        // INFO: Ends header section
         try stream.writeAll("\r\n");
 
-        if (response.body != null) {
-            try stream.writeAll(response.body.?);
+        if (response.body) |body| {
+            try stream.writeAll(body);
         }
     }
 };

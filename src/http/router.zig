@@ -1,50 +1,19 @@
 const std = @import("std");
 
-const httpEnums = @import("./enums.zig");
-
 const HttpRequest = @import("./request.zig").HttpRequest;
 const HttpResponse = @import("./response.zig").HttpResponse;
+
+const HttpMethod = HttpRequest.HttpMethod;
+const HttpStatus = HttpResponse.HttpStatus;
+
+const ResponseBuilder = @import("./response.zig").ResponseBuilder;
+const EndpointResponse = @import("./response.zig").EndpointResponse;
 
 pub const HttpRouter = struct {
     const Self = @This();
 
-    pub const EndpointHandler = *const fn (request: HttpRequest, data: *EndpointData) ?[]const u8;
-    pub const EndpointData = struct {
-        const Self = @This();
-
-        allocator: std.mem.Allocator,
-
-        pathVariables: std.StringHashMap([]const u8),
-        allocatedMemoryTracker: std.ArrayList([]u8),
-
-        contentType: []const u8,
-        httpStatus: httpEnums.HttpStatus,
-
-        pub fn init(allocator: std.mem.Allocator, pathVariables: std.StringHashMap([]const u8)) EndpointData.Self {
-            return .{
-                .allocator = allocator,
-
-                .pathVariables = pathVariables,
-                .allocatedMemoryTracker = std.ArrayList([]u8).init(allocator),
-
-                .contentType = "text/plain",
-                .httpStatus = httpEnums.HttpStatus.Ok,
-            };
-        }
-
-        pub fn deinit(self: *EndpointData.Self) void {
-            self.pathVariables.deinit();
-
-            for (self.allocatedMemoryTracker.items) |memory| {
-                self.allocator.free(memory);
-            }
-            self.allocatedMemoryTracker.deinit();
-        }
-
-        pub fn deferMemoryToFree(self: *EndpointData.Self, memory: []u8) void {
-            self.allocatedMemoryTracker.append(memory) catch {};
-        }
-    };
+    pub const EndpointHandler =
+        *const fn (request: HttpRequest, builder: *ResponseBuilder) EndpointResponse;
 
     allocator: std.mem.Allocator,
 
@@ -63,20 +32,24 @@ pub const HttpRouter = struct {
         self.* = undefined;
     }
 
-    pub const RouteError = error{
-        MalformedPath,
-    };
+    pub fn registerRoute(
+        self: *Self,
+        comptime method: HttpMethod,
+        comptime path: []const u8,
+        comptime handler: EndpointHandler,
+    ) !void {
+        const routingKey = @tagName(method) ++ ":" ++ path;
 
-    pub fn registerRoute(self: *Self, comptime path: []const u8, comptime handler: EndpointHandler) !void {
         // TODO: Add validations
-        try self.routes.put(path, handler);
+        try self.routes.put(routingKey, handler);
     }
 
-    pub const EndpointSearchResult = struct {
-        handler: EndpointHandler,
-        variables: std.StringHashMap([]const u8),
-    };
-    pub fn findRoute(self: *Self, path: []const u8) !?EndpointSearchResult {
+    pub fn findRouteHandlerAndUpdateVariablesMap(
+        self: *Self,
+        method: HttpMethod,
+        path: []const u8,
+        pathVariables: *std.StringHashMap([]const u8),
+    ) !?EndpointHandler {
         var pathIterator = std.mem.splitScalar(
             u8,
             path,
@@ -84,76 +57,69 @@ pub const HttpRouter = struct {
         );
         var routerIterator = self.routes.keyIterator();
 
-        var pathVariables = std
-            .StringHashMap([]const u8)
-            .init(self.allocator);
+        while (routerIterator.next()) |routerMethodPath| {
+            const methodPathSeparatorIndex = std.mem.indexOfScalar(
+                u8,
+                routerMethodPath.*,
+                ':',
+            );
 
-        while (routerIterator.next()) |routerPath| {
+            const httpMethod = try HttpMethod.fromString(
+                routerMethodPath.*[0..methodPathSeparatorIndex.?],
+            );
+            if (httpMethod != method) {
+                continue;
+            }
+
             pathIterator.reset();
-
             var routerPathIterator = std.mem.splitScalar(
                 u8,
-                routerPath.*,
+                routerMethodPath.*[(methodPathSeparatorIndex.? + 1)..],
                 '/',
             );
-            while (routerPathIterator.next()) |routerPathPart| {
-                const pathPart = pathIterator.next();
 
-                const comparisonResult = comparePathParts(
-                    routerPathPart,
-                    pathPart,
-                );
+            var clearingPathMapIterator = pathVariables.keyIterator();
+            while (clearingPathMapIterator.next()) |variableKey| {
+                pathVariables.removeByPtr(variableKey);
+            }
 
-                if (comparisonResult.variable != null) {
-                    try pathVariables.put(
-                        comparisonResult.variable.?.name,
-                        comparisonResult.variable.?.value,
-                    );
-                    continue;
-                } else if (comparisonResult.isEqual) {
-                    continue;
-                } else {
-                    break;
-                }
-            } else {
-                return .{
-                    .handler = self.routes.get(routerPath.*).?,
-                    .variables = pathVariables,
-                };
+            const wasPathMatched = try comparePathIterators(
+                &routerPathIterator,
+                &pathIterator,
+                pathVariables,
+            );
+            if (wasPathMatched) {
+                return self.routes.get(routerMethodPath.*).?;
             }
         }
 
-        pathVariables.deinit();
         return null;
     }
 
-    pub fn updateResponse(self: *Self, request: HttpRequest, response: *HttpResponse) !void {
-        var routeMatch = try self.findRoute(request.path);
+    fn comparePathIterators(
+        routerPathIterator: *std.mem.SplitIterator(u8, .scalar),
+        lookupPathIterator: *std.mem.SplitIterator(u8, .scalar),
+        variables: *std.StringHashMap([]const u8),
+    ) !bool {
+        while (routerPathIterator.next()) |routerPathPart| {
+            const pathPart = lookupPathIterator.next();
 
-        if (routeMatch != null) {
-            var data = EndpointData.init(
-                request.allocator,
-                routeMatch.?.variables,
-            );
-            defer data.deinit();
-
-            const endpointResponse = routeMatch.?.handler(
-                request,
-                &data,
+            const comparisonResult = comparePathParts(
+                routerPathPart,
+                pathPart,
             );
 
-            try response.prepare(
-                data.httpStatus,
-                endpointResponse,
-                data.contentType,
-            );
-        } else {
-            try response.prepare(
-                httpEnums.HttpStatus.NotFound,
-                null,
-                null,
-            );
+            if (comparisonResult.variable != null) {
+                try variables.put(
+                    comparisonResult.variable.?.name,
+                    comparisonResult.variable.?.value,
+                );
+            } else if (comparisonResult.isEqual == false) {
+                return false;
+            }
         }
+
+        return true;
     }
 
     const PathPartCompareResult = struct {

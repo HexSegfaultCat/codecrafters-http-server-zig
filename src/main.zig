@@ -4,12 +4,14 @@ const net = std.net;
 const DIRECTORY_ARG = "directory";
 
 const httpConsts = @import("./http/consts.zig");
-const httpEnums = @import("./http/enums.zig");
 
-const HttpRequest = @import("./http/request.zig").HttpRequest;
 const HttpServer = @import("./http/server.zig").HttpServer;
 
-const EndpointData = @import("./http/router.zig").HttpRouter.EndpointData;
+const HttpRequest = @import("./http/request.zig").HttpRequest;
+const HttpResponse = @import("./http/response.zig").HttpResponse;
+
+const ResponseBuilder = @import("./http/response.zig").ResponseBuilder;
+const EndpointResponse = @import("./http/response.zig").EndpointResponse;
 
 var argParams: std.StringHashMap([]const u8) = undefined;
 
@@ -38,82 +40,152 @@ pub fn main() !void {
     }
 
     var server = HttpServer.init(allocator, stdout);
+    defer server.deinit();
+
     try server.setupServer("127.0.0.1", 4221);
 
-    try server.router.registerRoute("/", homePageEndpoint);
-    try server.router.registerRoute("/index.html", homePageEndpoint);
-    try server.router.registerRoute("/echo/{echoStr}", echoPageEndpoint);
-    try server.router.registerRoute("/user-agent", userAgentEndpoint);
-    try server.router.registerRoute("/files/{filename}", serveFileEndpoint);
+    try server.router.registerRoute(.Get, "/", homePageEndpoint);
+    try server.router.registerRoute(.Get, "/index.html", homePageEndpoint);
+    try server.router.registerRoute(.Get, "/echo/{echoStr}", echoPageEndpoint);
+    try server.router.registerRoute(.Get, "/user-agent", userAgentEndpoint);
+    try server.router.registerRoute(.Get, "/files/{filename}", serveFileEndpoint);
+    try server.router.registerRoute(.Post, "/files/{filename}", updateFileEndpoint);
 
     try server.runServer();
 }
 
-fn homePageEndpoint(request: HttpRequest, data: *EndpointData) ?[]const u8 {
+fn homePageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
     _ = request;
-    _ = data;
+    _ = builder;
 
-    return null;
+    return .{
+        .body = null,
+    };
 }
 
-fn echoPageEndpoint(request: HttpRequest, data: *EndpointData) ?[]const u8 {
-    _ = request;
+fn echoPageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+    _ = builder;
 
-    return data.pathVariables.get("echoStr");
+    return .{
+        .body = request.pathVariables.get("echoStr"),
+    };
 }
 
-fn userAgentEndpoint(request: HttpRequest, data: *EndpointData) ?[]const u8 {
-    _ = data;
-
+fn userAgentEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
     const userAgentHeaderUpper = std.ascii.allocUpperString(
-        request.allocator,
+        builder.allocator,
         httpConsts.HEADER_USER_AGENT,
     ) catch {
-        return "Server error";
+        return .{
+            .statusCode = .ServerError,
+            .body = "Server error",
+        };
     };
-    defer request.allocator.free(userAgentHeaderUpper);
+    builder.deferMemoryToFree(userAgentHeaderUpper);
 
-    return request.headers.get(userAgentHeaderUpper);
+    return .{
+        .body = request.headers.get(userAgentHeaderUpper),
+    };
 }
 
-fn serveFileEndpoint(request: HttpRequest, data: *EndpointData) ?[]const u8 {
-    _ = request;
-
+fn serveFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
     const genericBasePath = argParams.get(DIRECTORY_ARG) orelse "./";
     const absoluteBasePath = std.fs.cwd().realpathAlloc(
-        data.allocator,
+        builder.allocator,
         genericBasePath,
     ) catch {
-        return "Error while getting the full path";
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error while getting the full path",
+        };
     };
-    const filename = data.pathVariables.get("filename").?;
+    const filename = request.pathVariables.get("filename").?;
 
     const fullFilePath = std.fs.path.join(
-        data.allocator,
+        builder.allocator,
         &[_][]const u8{ absoluteBasePath, filename },
     ) catch {
-        return "Error";
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error",
+        };
     };
-    data.deferMemoryToFree(fullFilePath);
+    builder.deferMemoryToFree(fullFilePath);
 
     if (std.mem.startsWith(u8, fullFilePath, absoluteBasePath) == false) {
-        data.httpStatus = httpEnums.HttpStatus.NotFound;
-        return "Unauthorized to access directory above the base";
+        return .{
+            .statusCode = .Unauthorized,
+            .body = "Unauthorized to access directory above the base",
+        };
     }
 
     const file = std.fs.cwd().openFile(fullFilePath, .{}) catch {
-        data.httpStatus = httpEnums.HttpStatus.NotFound;
-        return "Error when opening the file";
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error when opening the file",
+        };
     };
     const fileData = file.readToEndAlloc(
-        data.allocator,
+        builder.allocator,
         10 * 1024 * 1024,
     ) catch {
-        data.httpStatus = httpEnums.HttpStatus.NotFound;
-        return "Error when reading the file";
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error when reading the file",
+        };
     };
-    data.deferMemoryToFree(fileData);
+    builder.deferMemoryToFree(fileData);
 
-    data.contentType = "application/octet-stream";
-    return fileData;
+    return .{
+        .contentType = "application/octet-stream",
+        .body = fileData,
+    };
+}
+
+fn updateFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+    const genericBasePath = argParams.get(DIRECTORY_ARG) orelse "./";
+    const absoluteBasePath = std.fs.cwd().realpathAlloc(
+        builder.allocator,
+        genericBasePath,
+    ) catch {
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error",
+        };
+    };
+    const filename = request.pathVariables.get("filename").?;
+
+    const fullFilePath = std.fs.path.join(
+        builder.allocator,
+        &[_][]const u8{ absoluteBasePath, filename },
+    ) catch {
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error",
+        };
+    };
+    builder.deferMemoryToFree(fullFilePath);
+
+    if (request.body == null) {
+        return .{ .statusCode = .NotFound };
+    }
+
+    const file = std.fs.cwd().createFile(fullFilePath, .{}) catch {
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error",
+        };
+    };
+    defer file.close();
+
+    file.writeAll(request.body.?) catch {
+        return .{
+            .statusCode = .ServerError,
+            .body = "Error",
+        };
+    };
+
+    return .{
+        .statusCode = .Created,
+    };
 }

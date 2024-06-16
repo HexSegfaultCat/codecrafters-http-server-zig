@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const httpConsts = @import("./consts.zig");
-const httpEnums = @import("./enums.zig");
 
 const PathError = error{
     MissingPath,
@@ -39,7 +38,7 @@ pub fn validatedProtocol(protocol: ?[]const u8) ProtocolError![]const u8 {
     const protocolName = protocol.?[0..separatorIndex];
     const protocolVersion = protocol.?[(separatorIndex + 1)..];
 
-    if (std.mem.eql(u8, protocolName, "HTTP") == false) {
+    if (std.mem.eql(u8, protocolName, httpConsts.HTTP_PROTOCOL) == false) {
         return ProtocolError.UnknownProtocol;
     } else if (std.mem.eql(u8, protocolVersion, httpConsts.HTTP_VERSION) == false) {
         return ProtocolError.UnsupportedProtocolVersion;

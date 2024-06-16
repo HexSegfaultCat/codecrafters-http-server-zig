@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const httpConsts = @import("./consts.zig");
-const httpEnums = @import("./enums.zig");
 const httpUtils = @import("./utils.zig");
 
 pub const HttpRequest = struct {
@@ -9,10 +8,12 @@ pub const HttpRequest = struct {
 
     allocator: std.mem.Allocator,
 
-    method: httpEnums.HttpMethod,
+    method: HttpMethod,
     path: []const u8,
     protocol: []const u8,
     headers: std.StringHashMap([]const u8),
+
+    pathVariables: std.StringHashMap([]const u8),
 
     body: ?[]const u8,
 
@@ -25,6 +26,8 @@ pub const HttpRequest = struct {
             .protocol = undefined,
             .headers = std.StringHashMap([]const u8).init(allocator),
 
+            .pathVariables = std.StringHashMap([]const u8).init(allocator),
+
             .body = null,
         };
     }
@@ -35,43 +38,15 @@ pub const HttpRequest = struct {
             self.allocator.free(headerEntry.key_ptr.*);
             self.allocator.free(headerEntry.value_ptr.*);
         }
-
         self.headers.deinit();
 
-        if (self.body != null) {
-            self.allocator.free(self.body.?);
+        self.pathVariables.deinit();
+
+        if (self.body) |body| {
+            self.allocator.free(body);
         }
 
         self.* = undefined;
-    }
-
-    pub fn readStreamData(self: *Self, stream: std.net.Stream) !std.ArrayList(u8) {
-        var outputData = std.ArrayList(u8).init(self.allocator);
-
-        const buffer = try self.allocator.alloc(u8, httpConsts.BUFFER_SIZE);
-        defer self.allocator.free(buffer);
-        @memset(buffer, 0);
-
-        var fds =
-            [_]std.posix.pollfd{.{
-            .fd = stream.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-
-        while (stream.read(buffer)) |bytesRead| {
-            try outputData.appendSlice(buffer[0..bytesRead]);
-
-            // INFO: Handle edgecase where socket waits for data if `bytesRead == buffer.len`
-            const dataAvailable = try std.posix.poll(&fds, 0);
-            if (bytesRead < buffer.len or dataAvailable == 0) {
-                break;
-            }
-        } else |err| {
-            return err;
-        }
-
-        return outputData;
     }
 
     const ParseRequestError = error{
@@ -79,19 +54,11 @@ pub const HttpRequest = struct {
         MalformedHeader,
     };
     pub fn parseUpdateRequest(self: *Self, rawRequestData: std.ArrayList(u8)) !void {
-        var requestIterator = std.mem.splitSequence(
-            u8,
-            rawRequestData.items,
-            "\r\n",
-        );
+        var requestIterator = std.mem.splitSequence(u8, rawRequestData.items, "\r\n");
         requestIterator.reset();
 
-        var statusLine = std.mem.splitScalar(
-            u8,
-            requestIterator.first(),
-            ' ',
-        );
-        self.method = try httpEnums.HttpMethod.fromString(statusLine.next());
+        var statusLine = std.mem.splitScalar(u8, requestIterator.first(), ' ');
+        self.method = try HttpMethod.fromString(statusLine.next());
         self.path = try httpUtils.validatedPath(statusLine.next());
         self.protocol = try httpUtils.validatedProtocol(statusLine.next());
 
@@ -101,11 +68,7 @@ pub const HttpRequest = struct {
                 break;
             }
 
-            const separatorIndex = std.mem.indexOfScalar(
-                u8,
-                headerLine,
-                ':',
-            ) orelse {
+            const separatorIndex = std.mem.indexOfScalar(u8, headerLine, ':') orelse {
                 return ParseRequestError.MalformedHeader;
             };
 
@@ -115,16 +78,46 @@ pub const HttpRequest = struct {
             );
             const headerValue = try self.allocator.dupe(
                 u8,
-                std.mem.trimLeft(
-                    u8,
-                    headerLine[(separatorIndex + 1)..],
-                    " ",
-                ),
+                std.mem.trimLeft(u8, headerLine[(separatorIndex + 1)..], " "),
             );
-
             try self.headers.put(headerName, headerValue);
         } else {
             return ParseRequestError.MissingEndOfHeaderSection;
         }
+
+        const bodyData = requestIterator.next();
+        if (bodyData) |body| {
+            self.body = try self.allocator.dupe(u8, body);
+        }
     }
+
+    pub const HttpMethod = enum {
+        Get,
+        Post,
+
+        pub const MethodError = error{
+            MissingHttpMethod,
+            MalformedHttpMethod,
+        };
+
+        pub fn fromString(methodName: ?[]const u8) MethodError!HttpMethod {
+            if (methodName == null) {
+                return MethodError.MissingHttpMethod;
+            }
+
+            var upperCaseStatus: [10]u8 = undefined;
+            _ = std.ascii.upperString(
+                &upperCaseStatus,
+                methodName.?,
+            );
+
+            if (std.mem.eql(u8, upperCaseStatus[0..3], "GET")) {
+                return HttpMethod.Get;
+            } else if (std.mem.eql(u8, upperCaseStatus[0..4], "POST")) {
+                return HttpMethod.Post;
+            } else {
+                return MethodError.MalformedHttpMethod;
+            }
+        }
+    };
 };

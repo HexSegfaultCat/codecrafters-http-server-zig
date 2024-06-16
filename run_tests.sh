@@ -61,9 +61,9 @@ trap "cleanup" SIGINT SIGTERM EXIT
 echo -n "Pre-test setup... "
 zig build
 if [ -n "${1}" ]; then
-  (zig build run 2>&1) &
+  (zig build run -- --directory ./tmp 2>&1) &
 else
-  (zig build run &> /dev/null) &
+  (zig build run -- --directory ./tmp &> /dev/null) &
 fi
 sleep 1
 echo "Done"

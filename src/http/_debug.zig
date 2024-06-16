@@ -14,8 +14,8 @@ pub fn printRawRequest(rawRequest: std.ArrayList(u8)) void {
 }
 
 pub fn printParsedRequest(request: HttpRequest) void {
-    std.debug.print("[PARSED REQUEST]\n---START-STATUS---\nMethod={any}\nPath={s}\nProtocol={s}\n---END-STATUS---\n", .{
-        request.method,
+    std.debug.print("[PARSED REQUEST]\n---START-STATUS---\nMethod={s}\nPath={s}\nProtocol={s}\n---END-STATUS---\n", .{
+        @tagName(request.method),
         request.path,
         request.protocol,
     });
@@ -37,8 +37,8 @@ pub fn printParsedRequest(request: HttpRequest) void {
 }
 
 pub fn printParsedResponse(response: HttpResponse) void {
-    std.debug.print("[PARSED RESPONSE]\n---START-STATUS---\nStatus={any}\nProtocol={s}\n---END-STATUS---\n", .{
-        response.statusCode,
+    std.debug.print("[PARSED RESPONSE]\n---START-STATUS---\nStatus={s}\nProtocol={s}\n---END-STATUS---\n", .{
+        @tagName(response.statusCode),
         response.protocolVersion,
     });
 
