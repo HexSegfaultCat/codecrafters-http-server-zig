@@ -46,7 +46,7 @@ pub const HeaderEntry = struct {
 
         const newRawValue = try std.mem.join(
             self.allocator,
-            ",",
+            ", ",
             self.headerValues,
         );
         self.allocator.free(self.rawHeaderValue);
@@ -97,7 +97,8 @@ pub fn addOrReplaceValue(self: *Self, headerName: []const u8, headerValue: []con
 
     var headerValueIterator = std.mem.splitScalar(u8, headerValue, ',');
     while (headerValueIterator.next()) |headerValuePart| {
-        try headerValueEntry.append(headerValuePart);
+        const actualValue = std.mem.trimLeft(u8, headerValuePart, &[_]u8{' '});
+        try headerValueEntry.append(actualValue);
     }
 
     try self.headersMap.put(normalizedHeaderName, headerValueEntry);
@@ -112,22 +113,24 @@ pub fn addOrAppendValue(self: *Self, headerName: []const u8, headerValue: []cons
 
     var headerValueIterator = std.mem.splitScalar(u8, headerValue, ',');
 
-    var mapValue = self.headersMap.get(normalizedHeaderName);
-    if (mapValue) |*existingMapValue| {
+    const mapValuePtr = self.headersMap.getPtr(normalizedHeaderName);
+    if (mapValuePtr) |existingMapValuePtr| {
         while (headerValueIterator.next()) |headerValuePart| {
-            const partCopy = try self.allocator.dupe(u8, headerValuePart);
-            try existingMapValue.append(partCopy);
+            const actualValue = std.mem.trimLeft(u8, headerValuePart, &[_]u8{' '});
+            try existingMapValuePtr.append(actualValue);
         }
     } else {
         var headerValueEntry = HeaderEntry.init(self.allocator);
 
         while (headerValueIterator.next()) |headerValuePart| {
-            const partCopy = try self.allocator.dupe(u8, headerValuePart);
-            try headerValueEntry.append(partCopy);
+            const actualValue = std.mem.trimLeft(u8, headerValuePart, &[_]u8{' '});
+            try headerValueEntry.append(actualValue);
         }
 
-        const headerNameCopy = try self.allocator.dupe(u8, normalizedHeaderName);
-        try self.headersMap.put(headerNameCopy, headerValueEntry);
+        try self.headersMap.put(
+            try self.allocator.dupe(u8, normalizedHeaderName),
+            headerValueEntry,
+        );
     }
 }
 
@@ -236,4 +239,50 @@ test "add same header with different casing and get with uppercase" {
     try std.testing.expectEqual(1, entry.?.headerValues.len);
     try std.testing.expectEqualStrings(headerValue, entry.?.headerValues[0]);
     try std.testing.expectEqualStrings(headerValue, entry.?.rawHeaderValue);
+}
+
+test "add multiple values to one header item" {
+    // Setup
+    var headers = Self.init(std.testing.allocator);
+    defer headers.deinit();
+
+    const headerName = "Accept-Encoding";
+
+    const headerValue1 = "gzip";
+    const headerValue2 = "deflate";
+    const headerValue3 = "some-name";
+
+    const headerValueCombined = try std.mem.join(
+        std.testing.allocator,
+        ", ",
+        &[_][]const u8{ headerValue1, headerValue2, headerValue3 },
+    );
+    defer std.testing.allocator.free(headerValueCombined);
+
+    const headerValueAppend1 = "additional-value";
+    const headerValueAppend2 = "other-value";
+
+    const headerValueAppendCombined = try std.mem.join(
+        std.testing.allocator,
+        ", ",
+        &[_][]const u8{ headerValueAppend1, headerValueAppend2 },
+    );
+    defer std.testing.allocator.free(headerValueAppendCombined);
+
+    try headers.addOrAppendValue(headerName, headerValueCombined);
+    try headers.addOrAppendValue(headerName, headerValueAppendCombined);
+
+    // Verify
+    const entry = try headers.getHeaderEntry(headerName);
+
+    const expectedRawHeaderValue = try std.mem.join(
+        std.testing.allocator,
+        ", ",
+        &[_][]const u8{ headerValueCombined, headerValueAppendCombined },
+    );
+    defer std.testing.allocator.free(expectedRawHeaderValue);
+
+    try std.testing.expect(entry != null);
+    try std.testing.expectEqual(5, entry.?.headerValues.len);
+    try std.testing.expectEqualStrings(expectedRawHeaderValue, entry.?.rawHeaderValue);
 }
