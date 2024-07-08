@@ -3,15 +3,15 @@ const net = std.net;
 
 const DIRECTORY_ARG = "directory";
 
-const httpConsts = @import("./http/consts.zig");
+const HttpHeaders = @import("./http/headers.zig");
 
-const HttpServer = @import("./http/server.zig").HttpServer;
+const HttpServer = @import("./http/server.zig");
 
-const HttpRequest = @import("./http/request.zig").HttpRequest;
-const HttpResponse = @import("./http/response.zig").HttpResponse;
+const HttpRequest = @import("./http/request.zig");
+const HttpResponse = @import("./http/response.zig");
 
-const ResponseBuilder = @import("./http/response.zig").ResponseBuilder;
-const EndpointResponse = @import("./http/response.zig").EndpointResponse;
+const EndpointResponse = HttpResponse.EndpointResponse;
+const ResponseAllocator = HttpResponse.ResponseAllocator;
 
 var argParams: std.StringHashMap([]const u8) = undefined;
 
@@ -54,7 +54,7 @@ pub fn main() !void {
     try server.runServer();
 }
 
-fn homePageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+fn homePageEndpoint(request: HttpRequest, builder: *ResponseAllocator) EndpointResponse {
     _ = request;
     _ = builder;
 
@@ -63,7 +63,7 @@ fn homePageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointRes
     };
 }
 
-fn echoPageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+fn echoPageEndpoint(request: HttpRequest, builder: *ResponseAllocator) EndpointResponse {
     _ = builder;
 
     return .{
@@ -71,24 +71,20 @@ fn echoPageEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointRes
     };
 }
 
-fn userAgentEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
-    const userAgentHeaderUpper = std.ascii.allocUpperString(
-        builder.allocator,
-        httpConsts.HEADER_USER_AGENT,
-    ) catch {
-        return .{
-            .statusCode = .ServerError,
-            .body = "Server error",
-        };
-    };
-    builder.deferMemoryToFree(userAgentHeaderUpper);
+fn userAgentEndpoint(request: HttpRequest, builder: *ResponseAllocator) EndpointResponse {
+    _ = builder;
 
-    return .{
-        .body = request.headers.get(userAgentHeaderUpper),
-    };
+    const userAgent =
+        request.headers.getHeaderEntry(HttpHeaders.HEADER_USER_AGENT) catch null;
+
+    if (userAgent) |entry| {
+        return .{ .body = entry.rawHeaderValue };
+    } else {
+        return .{ .body = "No user agent provided by client" };
+    }
 }
 
-fn serveFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+fn serveFileEndpoint(request: HttpRequest, builder: *ResponseAllocator) EndpointResponse {
     const genericBasePath = argParams.get(DIRECTORY_ARG) orelse "./";
     const absoluteBasePath = std.fs.cwd().realpathAlloc(
         builder.allocator,
@@ -142,7 +138,7 @@ fn serveFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointRe
     };
 }
 
-fn updateFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointResponse {
+fn updateFileEndpoint(request: HttpRequest, builder: *ResponseAllocator) EndpointResponse {
     const genericBasePath = argParams.get(DIRECTORY_ARG) orelse "./";
     const absoluteBasePath = std.fs.cwd().realpathAlloc(
         builder.allocator,
@@ -188,4 +184,8 @@ fn updateFileEndpoint(request: HttpRequest, builder: *ResponseBuilder) EndpointR
     return .{
         .statusCode = .Created,
     };
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

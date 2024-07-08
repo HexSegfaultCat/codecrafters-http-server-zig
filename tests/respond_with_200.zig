@@ -8,7 +8,7 @@ test "Check response for empty request" {
     var response = try httpClient.fetchResponse(
         "http://127.0.0.1:4221",
         http.Method.GET,
-        .{},
+        .{ .accept_encoding = .omit },
     );
     defer response.deinit();
 
@@ -22,7 +22,7 @@ test "Check response for `index.html`" {
     var response = try httpClient.fetchResponse(
         "http://127.0.0.1:4221/index.html",
         http.Method.GET,
-        .{},
+        .{ .accept_encoding = .omit },
     );
     defer response.deinit();
 

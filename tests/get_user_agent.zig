@@ -12,6 +12,7 @@ test "Check user agent response" {
         http.Method.GET,
         .{
             .user_agent = .{ .override = customUserAgent },
+            .accept_encoding = .omit,
         },
     );
     defer response.deinit();

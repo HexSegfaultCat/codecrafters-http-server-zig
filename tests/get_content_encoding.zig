@@ -4,22 +4,22 @@ const testing = std.testing;
 
 const httpClient = @import("./shared/http_client.zig");
 
-test "Check echo response" {
-    const echoValue = "abcdefg";
+// FIX: Fails for now, until actual compression is added
+test "Check content encoding" {
+    const customUserAgent = "zig/0.12.0 (custom-user-agent)";
 
     var response = try httpClient.fetchResponse(
-        "http://127.0.0.1:4221/echo/" ++ echoValue,
+        "http://127.0.0.1:4221/user-agent",
         http.Method.GET,
-        .{ .accept_encoding = .omit },
+        .{
+            .user_agent = .{ .override = customUserAgent },
+            .accept_encoding = .{ .override = "gzip" },
+        },
     );
     defer response.deinit();
 
     try testing.expectEqual(
         http.Status.ok,
         response.status,
-    );
-    try testing.expectEqualStrings(
-        echoValue,
-        response.body.items,
     );
 }
