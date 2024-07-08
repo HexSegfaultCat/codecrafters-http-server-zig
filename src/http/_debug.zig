@@ -53,7 +53,7 @@ pub fn printParsedResponse(response: HttpResponse) void {
     std.debug.print("---END-HEADERS---\n", .{});
 
     std.debug.print("---START-BODY---\n{?s}\n---END-BODY---\n", .{
-        response.body,
+        response.plainTextBody,
     });
     std.debug.print("[/PARSED RESPONSE]\n", .{});
 }

@@ -4,7 +4,6 @@ const testing = std.testing;
 
 const httpClient = @import("./shared/http_client.zig");
 
-// FIX: Fails for now, until actual compression is added
 test "Check content encoding" {
     const customUserAgent = "zig/0.12.0 (custom-user-agent)";
 
@@ -18,8 +17,6 @@ test "Check content encoding" {
     );
     defer response.deinit();
 
-    try testing.expectEqual(
-        http.Status.ok,
-        response.status,
-    );
+    try testing.expectEqual(http.Status.ok, response.status);
+    try testing.expectEqualStrings(customUserAgent, response.body.items);
 }

@@ -187,7 +187,9 @@ fn sendResponse(response: HttpResponse, stream: std.net.Stream) !void {
     }
     try stream.writeAll("\r\n");
 
-    if (response.body) |body| {
-        try stream.writeAll(body);
+    if (response.compressedBytesBody) |compressedBody| {
+        try stream.writeAll(compressedBody.items);
+    } else {
+        try stream.writeAll(response.plainTextBody);
     }
 }

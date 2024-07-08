@@ -13,7 +13,9 @@ protocolVersion: []const u8,
 statusCode: HttpStatus,
 headers: HttpHeaders,
 
-body: ?[]const u8,
+compression: HttpCompressionScheme,
+plainTextBody: []const u8,
+compressedBytesBody: ?std.ArrayList(u8),
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return .{
@@ -23,15 +25,18 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .statusCode = undefined,
         .headers = HttpHeaders.init(allocator),
 
-        .body = null,
+        .compression = .None,
+        .plainTextBody = &[_]u8{},
+        .compressedBytesBody = null,
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.headers.deinit();
 
-    if (self.body) |body| {
-        self.allocator.free(body);
+    self.allocator.free(self.plainTextBody);
+    if (self.compressedBytesBody) |byteBody| {
+        byteBody.deinit();
     }
 
     self.* = undefined;
@@ -42,37 +47,73 @@ pub fn updateResponse(
     endpointResponse: EndpointResponse,
     compressionSchemes: std.ArrayList(HttpCompressionScheme),
 ) !void {
+    try updateData(self, endpointResponse, compressionSchemes);
+
+    if (self.compression == .Gzip) {
+        self.compressedBytesBody = std.ArrayList(u8).init(self.allocator);
+
+        var compressor = try std.compress.gzip.compressor(
+            self.compressedBytesBody.?.writer(),
+            .{ .level = .default },
+        );
+        _ = try compressor.write(self.plainTextBody);
+        try compressor.flush();
+        try compressor.finish();
+    }
+
+    try updateHeaders(self, endpointResponse);
+}
+
+fn updateData(
+    self: *Self,
+    endpointResponse: EndpointResponse,
+    compressionSchemes: std.ArrayList(HttpCompressionScheme),
+) !void {
     self.protocolVersion = HttpConsts.HTTP_VERSION;
     self.statusCode = endpointResponse.statusCode;
 
     if (endpointResponse.body) |body| {
-        self.body = try self.allocator.dupe(u8, body);
-
-        const lengthCopy = try std.fmt.allocPrint(self.allocator, "{d}", .{body.len});
-        defer self.allocator.free(lengthCopy);
-
-        try self.headers.addOrReplaceValue(
-            HttpHeaders.HEADER_CONTENT_LENGTH,
-            lengthCopy,
-        );
-    }
-
-    if (endpointResponse.contentType) |contentType| {
-        const contentTypeCopy = try self.allocator.dupe(u8, contentType);
-        defer self.allocator.free(contentTypeCopy);
-
-        try self.headers.addOrReplaceValue(
-            HttpHeaders.HEADER_CONTENT_TYPE,
-            contentTypeCopy,
-        );
+        self.plainTextBody = try self.allocator.dupe(u8, body);
     }
 
     for (compressionSchemes.items) |compression| {
-        try self.headers.addOrAppendValue(
-            HttpHeaders.HEADER_CONTENT_ENCODING,
-            compression.toString(),
+        if (compression == .Gzip) {
+            self.compression = compression;
+        }
+    }
+}
+
+fn updateHeaders(self: *Self, endpointResponse: EndpointResponse) !void {
+    if (endpointResponse.contentType) |contentType| {
+        try self.headers.addOrReplaceValue(
+            HttpHeaders.HEADER_CONTENT_TYPE,
+            contentType,
         );
     }
+
+    if (self.compression == .Gzip) {
+        try self.headers.addOrAppendValue(
+            HttpHeaders.HEADER_CONTENT_ENCODING,
+            self.compression.toString(),
+        );
+    }
+
+    const length = if (self.compressedBytesBody) |bytesBody|
+        bytesBody.items.len
+    else
+        self.plainTextBody.len;
+
+    const lengthAsString = try std.fmt.allocPrint(
+        self.allocator,
+        "{d}",
+        .{length},
+    );
+    defer self.allocator.free(lengthAsString);
+
+    try self.headers.addOrReplaceValue(
+        HttpHeaders.HEADER_CONTENT_LENGTH,
+        lengthAsString,
+    );
 }
 
 pub const HttpStatus = enum(u16) {
