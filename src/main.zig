@@ -1,19 +1,16 @@
 const std = @import("std");
 const net = std.net;
 
+const HttpServer = @import("http/server.zig");
+
 pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-    const address = try net.Address.resolveIp("127.0.0.1", 4221);
-    var listener = try address.listen(.{
-        .reuse_address = true,
-    });
-    defer listener.deinit();
+    var server = HttpServer.init(allocator);
+    defer server.deinit();
 
-    var conn = try listener.accept();
-    defer conn.stream.close();
+    try server.configure(.{ .ipAddress = "127.0.0.1", .port = 4221 });
 
-    try stdout.print("client connected!", .{});
-
-    try conn.stream.writeAll("HTTP/1.1 200 OK\r\n\r\n");
+    try server.run();
 }
