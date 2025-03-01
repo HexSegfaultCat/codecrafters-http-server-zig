@@ -17,6 +17,7 @@ pub fn main() !void {
     try server.router.registerRoute(.Get, "/", homePageEndpoint);
     try server.router.registerRoute(.Get, "/index.html", homePageEndpoint);
     try server.router.registerRoute(.Get, "/echo/{str}", echoPageEndpoint);
+    try server.router.registerRoute(.Get, "/user-agent", userAgentEndpoint);
 
     try server.run();
 }
@@ -36,6 +37,19 @@ fn echoPageEndpoint(request: HttpRequest) !HttpResponse {
 
     try response.body.appendSlice(request.uri.pathParams.getEntry("str").?.value_ptr.*);
     response.statusCode = .Ok;
+
+    return response;
+}
+
+fn userAgentEndpoint(request: HttpRequest) !HttpResponse {
+    var response = HttpResponse.init(request.allocator);
+    errdefer response.deinit();
+
+    if (request.headers.get("User-Agent")) |userAgent| {
+        try response.body.appendSlice(userAgent.value);
+    } else {
+        response.statusCode = .NotFound;
+    }
 
     return response;
 }

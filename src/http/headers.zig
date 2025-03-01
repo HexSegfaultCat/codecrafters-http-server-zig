@@ -57,7 +57,7 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-pub fn get(self: *Self, key: []const u8) ?HeaderItem {
+pub fn get(self: Self, key: []const u8) ?HeaderItem {
     for (self.headers.items) |header| {
         if (std.ascii.eqlIgnoreCase(key, header.name)) {
             return header;
