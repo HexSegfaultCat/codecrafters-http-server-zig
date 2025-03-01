@@ -38,27 +38,27 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 
-headersList: std.ArrayList(HeaderItem),
+headers: std.ArrayList(HeaderItem),
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return .{
         .allocator = allocator,
 
-        .headersList = std.ArrayList(HeaderItem).init(allocator),
+        .headers = std.ArrayList(HeaderItem).init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
-    for (self.headersList.items) |*item| {
+    for (self.headers.items) |*item| {
         item.deinit();
     }
-    self.headersList.deinit();
+    self.headers.deinit();
 
     self.* = undefined;
 }
 
 pub fn get(self: *Self, key: []const u8) ?HeaderItem {
-    for (self.headersList.items) |header| {
+    for (self.headers.items) |header| {
         if (std.ascii.eqlIgnoreCase(key, header.name)) {
             return header;
         }
@@ -73,6 +73,46 @@ pub fn addOrUpdate(self: *Self, name: []const u8, value: []const u8) !void {
         try item.updateValue(value);
     } else {
         const item = try HeaderItem.init(self.allocator, name, value);
-        try self.headersList.append(item);
+        try self.headers.append(item);
     }
+}
+
+test "add and retrieve header with the same casing" {
+    const allocator = std.testing.allocator;
+
+    var headers = Self.init(allocator);
+    defer headers.deinit();
+
+    const expectedHeaderName = "Content-Length";
+    const expectedHeaderValue = "100";
+
+    try headers.addOrUpdate(expectedHeaderName, expectedHeaderValue);
+
+    const contentLength = headers.get(expectedHeaderName).?;
+
+    try std.testing.expectEqualStrings(expectedHeaderName, contentLength.name);
+    try std.testing.expectEqualStrings(expectedHeaderValue, contentLength.value);
+}
+
+test "add and retrieve header with different casing" {
+    const allocator = std.testing.allocator;
+
+    var headers = Self.init(allocator);
+    defer headers.deinit();
+
+    const expectedHeaderName = "CoNtEnT-LeNgTh";
+    const expectedHeaderValue = "100";
+
+    try headers.addOrUpdate(expectedHeaderName, expectedHeaderValue);
+
+    const lowerHeaderName = try std.ascii.allocLowerString(
+        allocator,
+        expectedHeaderName,
+    );
+    defer allocator.free(lowerHeaderName);
+
+    const contentLength = headers.get(lowerHeaderName).?;
+
+    try std.testing.expectEqualStrings(expectedHeaderName, contentLength.name);
+    try std.testing.expectEqualStrings(expectedHeaderValue, contentLength.value);
 }

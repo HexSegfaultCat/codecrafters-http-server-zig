@@ -2,32 +2,44 @@ const std = @import("std");
 const http = std.http;
 const testing = std.testing;
 
-const httpClient = @import("./shared/http_client.zig");
-
 test "Check response for empty request" {
-    var response = try httpClient.fetchResponse(
-        "http://127.0.0.1:4221",
-        http.Method.GET,
-        .{ .accept_encoding = .omit },
-    );
-    defer response.deinit();
+    const allocator = std.heap.page_allocator;
+
+    var client = http.Client{ .allocator = allocator };
+    defer client.deinit();
+
+    const response = try client.fetch(.{
+        .method = .GET,
+        .location = .{
+            .uri = try std.Uri.parse("http://127.0.0.1:4221"),
+        },
+        .headers = .{ .accept_encoding = .omit },
+        .keep_alive = false,
+    });
 
     try testing.expectEqual(
-        http.Status.ok,
+        .ok,
         response.status,
     );
 }
 
 test "Check response for `index.html`" {
-    var response = try httpClient.fetchResponse(
-        "http://127.0.0.1:4221/index.html",
-        http.Method.GET,
-        .{ .accept_encoding = .omit },
-    );
-    defer response.deinit();
+    const allocator = std.heap.page_allocator;
+
+    var client = http.Client{ .allocator = allocator };
+    defer client.deinit();
+
+    const response = try client.fetch(.{
+        .method = .GET,
+        .location = .{
+            .uri = try std.Uri.parse("http://127.0.0.1:4221/index.html"),
+        },
+        .headers = .{ .accept_encoding = .omit },
+        .keep_alive = false,
+    });
 
     try testing.expectEqual(
-        http.Status.ok,
+        .ok,
         response.status,
     );
 }
