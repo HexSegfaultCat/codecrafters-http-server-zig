@@ -68,9 +68,6 @@ pub fn run(self: *Self) !void {
         .tv_usec = (SendTimeoutMiliseconds % 1000) * 1000,
     };
 
-    var waitGroup = std.Thread.WaitGroup{};
-    defer waitGroup.finish();
-
     while (self.server.accept()) |connection| {
         std.log.info("Client from {any} accepted", .{connection.address});
 
@@ -80,7 +77,8 @@ pub fn run(self: *Self) !void {
             std.posix.SO.SNDTIMEO,
             &std.mem.toBytes(socketSendTimeout),
         );
-        self.threadPool.spawnWg(&waitGroup, threadClientHandler, .{ self, connection });
+
+        try self.threadPool.spawn(threadClientHandler, .{ self, connection });
     } else |err| {
         return err;
     }
