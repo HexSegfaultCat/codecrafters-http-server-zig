@@ -19,6 +19,7 @@ pub fn init(allocator: std.mem.Allocator, uri: []const u8) !Self {
         .pathParams = std.StringHashMap([]const u8).init(allocator),
         .queryParams = std.StringHashMap([]const u8).init(allocator),
     };
+    errdefer self.deinit();
 
     if (std.mem.indexOfScalar(u8, self.raw, '?')) |separatorIndex| {
         self.url = self.raw[0..separatorIndex];
