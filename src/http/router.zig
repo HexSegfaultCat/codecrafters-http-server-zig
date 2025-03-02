@@ -153,7 +153,7 @@ test "match route when different path registered with the same method" {
         "/some-path",
         struct {
             fn handler(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.handler,
     );
@@ -182,7 +182,7 @@ test "match route when the same path registered with different method" {
         expectedPath,
         struct {
             fn handler(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.handler,
     );
@@ -212,7 +212,7 @@ test "match route when the same path registered with the same method" {
         expectedPath,
         struct {
             fn handler(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.handler,
     );
@@ -249,7 +249,7 @@ test "match route with single param when matching route registered" {
         expectedRouteUrl,
         struct {
             fn handler(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.handler,
     );
@@ -298,7 +298,7 @@ test "match route with multiple params when matching route registered" {
         expectedRouteUrl,
         struct {
             fn handler(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.handler,
     );
@@ -348,10 +348,10 @@ test "match route with multiple params when matching and non matching routes reg
 
     const handlers = struct {
         fn proper(_: HttpRequest) anyerror!HttpResponse {
-            return HttpResponse.init(allocator);
+            return try HttpResponse.initPlain(allocator, .Ok, "");
         }
         fn wrong(_: HttpRequest) anyerror!HttpResponse {
-            return HttpResponse.init(allocator);
+            return try HttpResponse.initPlain(allocator, .Ok, "");
         }
     };
     try router.registerRoute(.Get, "/{name}", handlers.wrong);

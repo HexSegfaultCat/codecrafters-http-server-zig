@@ -90,7 +90,7 @@ test "path not starting with /" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -105,7 +105,7 @@ test "path has '}' but doesn't have '{'" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -120,7 +120,7 @@ test "path has '{' but doesn't have '}'" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -135,7 +135,7 @@ test "path has braces in incorrect order" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -150,7 +150,7 @@ test "path has empty param" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -167,7 +167,7 @@ test "path is valid" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });
@@ -197,7 +197,7 @@ test "path is valid and has params" {
         .method = .Get,
         .handler = struct {
             fn any(_: HttpRequest) anyerror!HttpResponse {
-                return HttpResponse.init(allocator);
+                return try HttpResponse.initPlain(allocator, .Ok, "");
             }
         }.any,
     });

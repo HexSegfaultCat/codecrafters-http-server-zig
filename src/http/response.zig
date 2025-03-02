@@ -28,21 +28,46 @@ version: []const u8 = "1.1",
 statusCode: StatusCode,
 headers: HttpHeaders,
 
-body: std.ArrayList(u8),
+plain: std.ArrayList(u8) = undefined,
+file: ?std.fs.File = null,
 
-pub fn init(allocator: std.mem.Allocator) Self {
-    return .{
+pub fn initPlain(
+    allocator: std.mem.Allocator,
+    statusCode: StatusCode,
+    data: []const u8,
+) !Self {
+    var self = Self{
+        .allocator = allocator,
+
+        .statusCode = statusCode,
+        .headers = HttpHeaders.init(allocator),
+
+        .plain = std.ArrayList(u8).init(allocator),
+    };
+
+    try self.headers.addOrUpdate("Content-Type", "text/plain");
+    try self.plain.appendSlice(data);
+
+    return self;
+}
+
+pub fn initAsFileStream(allocator: std.mem.Allocator, file: std.fs.File) !Self {
+    var self = Self{
         .allocator = allocator,
 
         .statusCode = .Ok,
         .headers = HttpHeaders.init(allocator),
 
-        .body = std.ArrayList(u8).init(allocator),
+        .file = file,
     };
+
+    try self.headers.addOrUpdate("Content-Type", "application/octet-stream");
+
+    return self;
 }
 
 pub fn deinit(self: *Self) void {
-    self.body.deinit();
+    self.plain.deinit();
     self.headers.deinit();
 
     self.* = undefined;

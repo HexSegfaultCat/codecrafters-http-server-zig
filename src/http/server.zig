@@ -1,7 +1,9 @@
 const std = @import("std");
 
-const HeaderBufferSize = 1024;
-const DataBufferSize = 4096;
+const ReceiveHeaderBufferSize = 1024;
+const ReceiveDataBufferSize = 4096;
+const SendFileDataBufferSize = 4096;
+
 const ReceiveTimeoutMiliseconds = 5_000;
 const SendTimeoutMiliseconds = 5_000;
 
@@ -103,7 +105,6 @@ fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {
         @tagName(request.method),
         request.uri.url,
     });
-    std.log.debug("[REQUEST]\n{s}\n[/REQUEST]", .{request.body.items});
 
     const matchedRoute = try self.router.matchEndpointHandlerAndUpdateRouteParams(
         request.method,
@@ -116,41 +117,46 @@ fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {
         @intFromEnum(response.statusCode),
         response.statusCode.name(),
     });
-    std.log.debug("[RESPONSE]\n{s}\n[/RESPONSE]", .{response.body.items});
 
     try sendResponse(connection, response);
 }
 
 fn handleRequest(self: *Self, request: HttpRequest, matchedRoute: ?HttpRoute) !HttpResponse {
     if (matchedRoute) |route| {
-        var response = route.handler(request) catch |err| {
+        var response: HttpResponse = if (route.handler(request)) |response|
+            response
+        else |err| serverError: {
             std.log.err(
                 "Unexpected error {s} occurred while handling endpoint: {any}",
                 .{ @errorName(err), err },
             );
 
-            var serverErrorResponse = HttpResponse.init(self.allocator);
-            try serverErrorResponse.body.appendSlice(@errorName(err));
-            serverErrorResponse.statusCode = .ServerError;
-
-            return serverErrorResponse;
+            const serverErrorResponse = try HttpResponse.initPlain(
+                self.allocator,
+                .ServerError,
+                @errorName(err),
+            );
+            break :serverError serverErrorResponse;
         };
+
+        const size = if (response.file) |file| size: {
+            try file.seekTo(0);
+            const stats = try file.stat();
+
+            break :size stats.size;
+        } else response.plain.items.len;
 
         const bodySize = try std.fmt.allocPrint(
             self.allocator,
             "{d}",
-            .{response.body.items.len},
+            .{size},
         );
         defer self.allocator.free(bodySize);
 
-        try response.headers.addOrUpdate("Content-Type", "text/plain");
         try response.headers.addOrUpdate("Content-Length", bodySize);
-
         return response;
     } else {
-        var notFoundResponse = HttpResponse.init(self.allocator);
-        notFoundResponse.statusCode = .NotFound;
-
+        const notFoundResponse = try HttpResponse.initPlain(self.allocator, .NotFound, "");
         return notFoundResponse;
     }
 }
@@ -207,7 +213,7 @@ fn readStatusAndHeaderWithPartialBody(
     connection: std.net.Server.Connection,
     receivedData: *std.ArrayList(u8),
 ) !usize {
-    var buffer: [HeaderBufferSize]u8 = undefined;
+    var buffer: [ReceiveHeaderBufferSize]u8 = undefined;
     var pollFd = [_]std.posix.pollfd{.{
         .fd = connection.stream.handle,
         .events = std.posix.POLL.IN,
@@ -236,7 +242,7 @@ fn readRemainingBodyData(
     bytesToFetchCount: usize,
     requestBodyData: *std.ArrayList(u8),
 ) !void {
-    var buffer: [DataBufferSize]u8 = undefined;
+    var buffer: [ReceiveDataBufferSize]u8 = undefined;
     var pollFd = [_]std.posix.pollfd{.{
         .fd = connection.stream.handle,
         .events = std.posix.POLL.IN,
@@ -283,7 +289,6 @@ fn sendResponse(connection: std.net.Server.Connection, response: HttpResponse) !
             response.statusCode.name(),
         },
     );
-
     for (response.headers.headers.items) |header| {
         try std.fmt.format(
             writer,
@@ -291,7 +296,18 @@ fn sendResponse(connection: std.net.Server.Connection, response: HttpResponse) !
             .{ header.name, header.value },
         );
     }
-
     try writer.writeAll("\r\n");
-    try writer.writeAll(response.body.items);
+
+    if (response.file) |file| {
+        defer file.close();
+
+        var buffer: [SendFileDataBufferSize]u8 = undefined;
+        while (file.read(buffer[0..])) |size| {
+            try writer.writeAll(buffer[0..size]);
+        } else |err| {
+            return err;
+        }
+    } else {
+        try writer.writeAll(response.plain.items);
+    }
 }
