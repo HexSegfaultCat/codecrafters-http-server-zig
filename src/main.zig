@@ -46,6 +46,7 @@ pub fn main() !void {
     try server.router.registerRoute(.Get, "/echo/{str}", echoPageEndpoint);
     try server.router.registerRoute(.Get, "/user-agent", userAgentEndpoint);
     try server.router.registerRoute(.Get, "/files/{filename}", getFileEndpoint);
+    try server.router.registerRoute(.Post, "/files/{filename}", saveFileEndpoint);
 
     try server.run();
 }
@@ -94,7 +95,10 @@ fn getFileEndpoint(request: HttpRequest) !HttpResponse {
         );
     }
 
-    const file = std.fs.cwd().openFile(fileAbsolutePath, .{}) catch |err| switch (err) {
+    const file = std.fs.cwd().openFile(
+        fileAbsolutePath,
+        .{ .mode = .read_only },
+    ) catch |err| switch (err) {
         error.FileNotFound => return try HttpResponse.initPlain(
             request.allocator,
             .NotFound,
@@ -103,6 +107,45 @@ fn getFileEndpoint(request: HttpRequest) !HttpResponse {
         else => return err,
     };
     return try HttpResponse.initAsFileStream(request.allocator, file);
+}
+
+fn saveFileEndpoint(request: HttpRequest) !HttpResponse {
+    const absoluteBasePath = try std.fs.cwd().realpathAlloc(
+        request.allocator,
+        args.get(DirectoryArg) orelse "./",
+    );
+    defer request.allocator.free(absoluteBasePath);
+
+    const fileAbsolutePath = try std.fs.path.join(
+        request.allocator,
+        &[_][]const u8{
+            absoluteBasePath,
+            request.uri.pathParams.get("filename").?,
+        },
+    );
+    defer request.allocator.free(fileAbsolutePath);
+
+    if (std.mem.startsWith(u8, fileAbsolutePath, absoluteBasePath) == false) {
+        return try HttpResponse.initPlain(
+            request.allocator,
+            .Unauthorized,
+            "Unauthorized to access directory above the base",
+        );
+    }
+
+    const file = std.fs.cwd().createFile(fileAbsolutePath, .{}) catch |err| switch (err) {
+        error.FileNotFound => return try HttpResponse.initPlain(
+            request.allocator,
+            .NotFound,
+            "File does not exist",
+        ),
+        else => return err,
+    };
+    defer file.close();
+
+    try file.writeAll(request.body.items);
+
+    return try HttpResponse.initPlain(request.allocator, .Created, "");
 }
 
 test {
