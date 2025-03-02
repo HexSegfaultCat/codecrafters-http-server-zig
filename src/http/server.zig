@@ -14,7 +14,9 @@ const HttpResponse = @import("response.zig");
 
 pub const Config = struct {
     ipAddress: []const u8,
-    port: u16,
+    port: u16 = 0,
+
+    maxThreadsCount: u16 = 10,
 };
 
 pub const HttpClientError = error{
@@ -26,6 +28,8 @@ allocator: std.mem.Allocator,
 
 address: std.net.Address = undefined,
 server: std.net.Server = undefined,
+threadPool: std.Thread.Pool = undefined,
+
 router: HttpRouter,
 
 pub fn init(allocator: std.mem.Allocator) Self {
@@ -38,12 +42,17 @@ pub fn init(allocator: std.mem.Allocator) Self {
 
 pub fn deinit(self: *Self) void {
     self.router.deinit();
+    self.threadPool.deinit();
 
     self.* = undefined;
 }
 
 pub fn configure(self: *Self, config: Config) !void {
     self.address = try std.net.Address.resolveIp(config.ipAddress, config.port);
+    try self.threadPool.init(.{
+        .allocator = self.allocator,
+        .n_jobs = config.maxThreadsCount,
+    });
 }
 
 pub fn run(self: *Self) !void {
@@ -59,8 +68,10 @@ pub fn run(self: *Self) !void {
         .tv_usec = (SendTimeoutMiliseconds % 1000) * 1000,
     };
 
+    var waitGroup = std.Thread.WaitGroup{};
+    defer waitGroup.finish();
+
     while (self.server.accept()) |connection| {
-        defer connection.stream.close();
         std.log.info("Client from {any} accepted", .{connection.address});
 
         try std.posix.setsockopt(
@@ -69,16 +80,21 @@ pub fn run(self: *Self) !void {
             std.posix.SO.SNDTIMEO,
             &std.mem.toBytes(socketSendTimeout),
         );
-
-        self.handleConnection(connection) catch |err| {
-            std.log.err(
-                "[{any}] Unexpected error while handling connection: {any}",
-                .{ connection.address, err },
-            );
-        };
+        self.threadPool.spawnWg(&waitGroup, threadClientHandler, .{ self, connection });
     } else |err| {
         return err;
     }
+}
+
+fn threadClientHandler(server: *Self, connection: std.net.Server.Connection) void {
+    defer connection.stream.close();
+
+    handleConnection(server, connection) catch |err| {
+        std.log.err(
+            "[{any}] Unexpected error while handling connection: {any}",
+            .{ connection.address, err },
+        );
+    };
 }
 
 fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {

@@ -12,7 +12,12 @@ pub fn main() !void {
     var server = HttpServer.init(allocator);
     defer server.deinit();
 
-    try server.configure(.{ .ipAddress = "127.0.0.1", .port = 4221 });
+    try server.configure(.{
+        .ipAddress = "127.0.0.1",
+        .port = 4221,
+
+        .maxThreadsCount = 10,
+    });
 
     try server.router.registerRoute(.Get, "/", homePageEndpoint);
     try server.router.registerRoute(.Get, "/index.html", homePageEndpoint);
