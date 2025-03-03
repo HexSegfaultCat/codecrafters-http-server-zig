@@ -1,8 +1,6 @@
 const std = @import("std");
 
 pub const HeaderItem = struct {
-    const Self = @This();
-
     allocator: std.mem.Allocator,
 
     name: []const u8,
@@ -12,7 +10,7 @@ pub const HeaderItem = struct {
         allocator: std.mem.Allocator,
         name: []const u8,
         value: []const u8,
-    ) !HeaderItem.Self {
+    ) !HeaderItem {
         return .{
             .allocator = allocator,
 
@@ -21,16 +19,28 @@ pub const HeaderItem = struct {
         };
     }
 
-    pub fn deinit(self: *HeaderItem.Self) void {
+    pub fn deinit(self: *HeaderItem) void {
         self.allocator.free(self.name);
         self.allocator.free(self.value);
 
         self.* = undefined;
     }
 
-    pub fn updateValue(self: *HeaderItem.Self, value: []const u8) !void {
+    pub fn updateValueRealloc(self: *HeaderItem, value: []const u8) !void {
         self.allocator.free(self.value);
         self.value = try self.allocator.dupe(u8, value);
+    }
+
+    pub fn separatedValuesAlloc(self: HeaderItem) !std.ArrayList([]const u8) {
+        var values = std.ArrayList([]const u8).init(self.allocator);
+
+        var valuesIt = std.mem.splitScalar(u8, self.value, ',');
+        while (valuesIt.next()) |value| {
+            const firstNonSpaceIndex = std.mem.indexOfNone(u8, value, " ") orelse 0;
+            try values.append(value[firstNonSpaceIndex..]);
+        }
+
+        return values;
     }
 };
 
@@ -70,7 +80,7 @@ pub fn get(self: Self, key: []const u8) ?HeaderItem {
 pub fn addOrUpdate(self: *Self, name: []const u8, value: []const u8) !void {
     var existingEntry = self.get(name);
     if (existingEntry) |*item| {
-        try item.updateValue(value);
+        try item.updateValueRealloc(value);
     } else {
         const item = try HeaderItem.init(self.allocator, name, value);
         try self.headers.append(item);
@@ -115,4 +125,31 @@ test "add and retrieve header with different casing" {
 
     try std.testing.expectEqualStrings(expectedHeaderName, contentLength.name);
     try std.testing.expectEqualStrings(expectedHeaderValue, contentLength.value);
+}
+
+test "add and retrieve multi value header" {
+    const allocator = std.testing.allocator;
+
+    var headers = Self.init(allocator);
+    defer headers.deinit();
+
+    const expectedValue1 = "abc";
+    const expectedValue2 = "def";
+    const expectedValue3 = "foo";
+
+    const headerName = "Some-Header";
+    const fullValue = std.fmt.comptimePrint("   {s},  {s},{s}", .{
+        expectedValue1,
+        expectedValue2,
+        expectedValue3,
+    });
+    try headers.addOrUpdate(headerName, fullValue);
+
+    const values = try headers.get(headerName).?.separatedValuesAlloc();
+    defer values.deinit();
+
+    try std.testing.expectEqual(3, values.items.len);
+    try std.testing.expectEqualStrings(expectedValue1, values.items[0]);
+    try std.testing.expectEqualStrings(expectedValue2, values.items[1]);
+    try std.testing.expectEqualStrings(expectedValue3, values.items[2]);
 }

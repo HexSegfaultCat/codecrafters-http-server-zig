@@ -22,11 +22,18 @@ pub const StatusCode = enum(u16) {
     }
 };
 
+pub const Encoding = enum {
+    None,
+    Gzip,
+};
+
 allocator: std.mem.Allocator,
 
 version: []const u8 = "1.1",
 statusCode: StatusCode,
 headers: HttpHeaders,
+
+encoding: Encoding = .None,
 
 plain: std.ArrayList(u8) = undefined,
 file: ?std.fs.File = null,
@@ -67,8 +74,21 @@ pub fn initAsFileStream(allocator: std.mem.Allocator, file: std.fs.File) !Self {
 }
 
 pub fn deinit(self: *Self) void {
-    self.plain.deinit();
     self.headers.deinit();
+    self.plain.deinit();
+    if (self.file) |file| {
+        file.close();
+    }
 
     self.* = undefined;
+}
+
+pub inline fn dataStream(self: Self) !std.io.AnyReader {
+    if (self.file) |file| {
+        try file.seekTo(0);
+        return file.reader().any();
+    } else {
+        var stream = std.io.fixedBufferStream(self.plain.items);
+        return stream.reader().any();
+    }
 }

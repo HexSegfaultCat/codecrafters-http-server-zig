@@ -1,8 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const ReceiveHeaderBufferSize = 1024;
 const ReceiveDataBufferSize = 4096;
-const SendFileDataBufferSize = 4096;
+const SendFileDataBufferSize = 8192;
 
 const ReceiveTimeoutMiliseconds = 5_000;
 const SendTimeoutMiliseconds = 5_000;
@@ -71,7 +72,7 @@ pub fn run(self: *Self) !void {
     };
 
     while (self.server.accept()) |connection| {
-        std.log.info("Client from {any} accepted", .{connection.address});
+        std.log.info("[{any}] * Connection opened", .{connection.address});
 
         try std.posix.setsockopt(
             connection.stream.handle,
@@ -88,6 +89,7 @@ pub fn run(self: *Self) !void {
 
 fn threadClientHandler(server: *Self, connection: std.net.Server.Connection) void {
     defer connection.stream.close();
+    defer std.log.info("[{any}] * Connection closed", .{connection.address});
 
     handleConnection(server, connection) catch |err| {
         std.log.err(
@@ -99,6 +101,7 @@ fn threadClientHandler(server: *Self, connection: std.net.Server.Connection) voi
 
 fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {
     var request = try self.readAndParseRequest(connection);
+    defer request.deinit();
 
     std.log.info("[{any}] < {s}: {s}", .{
         connection.address,
@@ -110,7 +113,9 @@ fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {
         request.method,
         &request.uri,
     );
-    const response = try self.handleRequest(request, matchedRoute);
+
+    var response = try self.handleRequest(request, matchedRoute);
+    defer response.deinit();
 
     std.log.info("[{any}] > {d}: {s}", .{
         connection.address,
@@ -123,7 +128,7 @@ fn handleConnection(self: *Self, connection: std.net.Server.Connection) !void {
 
 fn handleRequest(self: *Self, request: HttpRequest, matchedRoute: ?HttpRoute) !HttpResponse {
     if (matchedRoute) |route| {
-        var response: HttpResponse = if (route.handler(request)) |response|
+        var response = if (route.handler(request)) |response|
             response
         else |err| serverError: {
             std.log.err(
@@ -139,26 +144,28 @@ fn handleRequest(self: *Self, request: HttpRequest, matchedRoute: ?HttpRoute) !H
             break :serverError serverErrorResponse;
         };
 
-        const size = if (response.file) |file| size: {
-            try file.seekTo(0);
-            const stats = try file.stat();
+        response.encoding = try firstAvailableEncoding(request);
 
-            break :size stats.size;
-        } else response.plain.items.len;
-
-        const bodySize = try std.fmt.allocPrint(
-            self.allocator,
-            "{d}",
-            .{size},
-        );
-        defer self.allocator.free(bodySize);
-
-        try response.headers.addOrUpdate("Content-Length", bodySize);
         return response;
     } else {
         const notFoundResponse = try HttpResponse.initPlain(self.allocator, .NotFound, "");
         return notFoundResponse;
     }
+}
+
+fn firstAvailableEncoding(request: HttpRequest) !HttpResponse.Encoding {
+    if (request.headers.get("Accept-Encoding")) |acceptEncoding| {
+        const values = try acceptEncoding.separatedValuesAlloc();
+        defer values.deinit();
+
+        for (values.items) |encoding| {
+            if (std.ascii.eqlIgnoreCase(encoding, "gzip")) {
+                return .Gzip;
+            }
+        }
+    }
+
+    return .None;
 }
 
 fn readAndParseRequest(self: *Self, connection: std.net.Server.Connection) !HttpRequest {
@@ -277,10 +284,40 @@ fn readRemainingBodyData(
 }
 
 fn sendResponse(connection: std.net.Server.Connection, response: HttpResponse) !void {
-    const writer = connection.stream.writer();
+    var buffer: [SendFileDataBufferSize]u8 = undefined;
 
+    const dataSize = switch (response.encoding) {
+        .None => nonCompressed: {
+            const size = if (response.file) |file| size: {
+                const stats = try file.stat();
+
+                break :size stats.size;
+            } else response.plain.items.len;
+
+            break :nonCompressed size;
+        },
+        .Gzip => compressed: {
+            const nullDevice = if (builtin.target.os.tag == .windows)
+                "NUL"
+            else
+                "/dev/null";
+
+            var discardFile = try std.fs.openFileAbsolute(nullDevice, .{ .mode = .write_only });
+            var countingDiscardStream = std.io.countingWriter(discardFile.writer());
+
+            try readCompressAndWriteData(
+                &buffer,
+                try response.dataStream(),
+                countingDiscardStream.writer().any(),
+                response.encoding,
+            );
+            break :compressed countingDiscardStream.bytes_written;
+        },
+    };
+
+    const netWriter = connection.stream.writer();
     try std.fmt.format(
-        writer,
+        netWriter,
         "{s}/{s} {d} {s}\r\n",
         .{
             "HTTP",
@@ -289,25 +326,71 @@ fn sendResponse(connection: std.net.Server.Connection, response: HttpResponse) !
             response.statusCode.name(),
         },
     );
+
+    try std.fmt.format(
+        netWriter,
+        "{s}: {d}\r\n",
+        .{ "Content-Length", dataSize },
+    );
+
+    const headerTemplate = "{s}: {s}\r\n";
+    switch (response.encoding) {
+        .None => {},
+        .Gzip => {
+            try std.fmt.format(
+                netWriter,
+                headerTemplate,
+                .{ "Content-Encoding", "gzip" },
+            );
+        },
+    }
     for (response.headers.headers.items) |header| {
         try std.fmt.format(
-            writer,
-            "{s}: {s}\r\n",
+            netWriter,
+            headerTemplate,
             .{ header.name, header.value },
         );
     }
-    try writer.writeAll("\r\n");
+    try netWriter.writeAll("\r\n");
 
-    if (response.file) |file| {
-        defer file.close();
+    try readCompressAndWriteData(
+        &buffer,
+        try response.dataStream(),
+        netWriter.any(),
+        response.encoding,
+    );
+}
 
-        var buffer: [SendFileDataBufferSize]u8 = undefined;
-        while (file.read(buffer[0..])) |size| {
-            try writer.writeAll(buffer[0..size]);
-        } else |err| {
-            return err;
+fn readCompressAndWriteData(
+    buffer: []u8,
+    reader: std.io.AnyReader,
+    writer: std.io.AnyWriter,
+    encoding: HttpResponse.Encoding,
+) !void {
+    var compressorOrNull: ?std.compress.gzip.Compressor(@TypeOf(writer)) = switch (encoding) {
+        .None => null,
+        .Gzip => try std.compress.gzip.compressor(
+            writer,
+            .{ .level = .default },
+        ),
+    };
+
+    const dataStreamWriter = if (compressorOrNull) |*compressor| comp: {
+        var compressorWriter = compressor.writer();
+        break :comp compressorWriter.any();
+    } else writer;
+
+    while (reader.readAll(buffer)) |size| {
+        if (size == 0) {
+            break;
         }
-    } else {
-        try writer.writeAll(response.plain.items);
+        try dataStreamWriter.writeAll(buffer[0..size]);
+    } else |err| {
+        return err;
+    }
+
+    if (compressorOrNull) |*compressor| {
+        try compressor.flush();
+        try compressor.finish();
     }
 }
